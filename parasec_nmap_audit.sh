@@ -9,8 +9,9 @@ echo "Assicurati di avere l'autorizzazione necessaria per eseguire scansioni su 
 echo "L'uso non autorizzato di questo script su reti o host non consentiti può violare le leggi sulla privacy e sulla sicurezza informatica."
 echo "----------------------------------------------------"
 
-# Richiesta di conferma per proseguire con la scansione
-# Loop fino a quando l'utente non inserisce una risposta valida
+# Il ciclo while richiede una conferma all'utente prima di procedere con la scansione.
+# Il loop prosegue fino a quando l'utente non inserisce una risposta valida
+# L'utente deve rispondere con 's' oppure "S" per (sì) o con 'n' oppure "N" per (no).
 while true; do
     read -p "Vuoi proseguire con la scansione? (s/n, default=n): " choice
     case $choice in
@@ -25,14 +26,12 @@ done
 echo "Inserisci il nome del file contenente gli indirizzi IP da scansionare"
 read file_input
 
-# Controllo esistenza del file di input
 # Verifica se il file specificato dall'utente esiste
 if [[ ! -f "$file_input" ]]; then
     echo "Errore: Il file '$file_input' non esiste."
     exit 1
 fi
 
-# Controllo leggibilità del file di input
 # Verifica se il file può essere letto (i.e., ha i permessi di lettura)
 if [[ ! -r "$file_input" ]]; then
     echo "Errore: Il file '$file_input' non è leggibile."
@@ -42,41 +41,145 @@ fi
 echo "Inserisci il nome della cartella in cui salvare i log delle scansioni"
 read output_directory
 
-# Controllo esistenza della directory di output
-# Se la directory non esiste, prova a crearla
+# Verifica dell'esistenza della directory di output. Se non esiste, prova a crearla.
 if [[ ! -d "$output_directory" ]]; then
     echo "La directory '$output_directory' non esiste. Creazione in corso..."
     mkdir -p "$output_directory" || { echo "Errore nella creazione della directory."; exit 1; }
 fi
 
-# Creazione di un file di log temporaneo
+# Creazione di un file di log temporaneo per le scansioni.
 temp_log=$(mktemp)
 export temp_log # Esporta la variabile per renderla accessibile alle sotto-shell
 
-# Definizione della funzione nmap_scan per eseguire le scansioni
-# Prende come parametri un indirizzo IP, un tipo di scansione e una directory di output
+# Funzione nmap_scan: esegue una scansione nmap su un indirizzo IP specifico.
+# Argomenti:
+#   1. ip: Indirizzo IP su cui eseguire la scansione.
+#   2. type: Tipo di scansione nmap da eseguire.
+#   3. directory: Directory in cui salvare i log delle scansioni.
 nmap_scan() {
-    ip=$1
-    type=$2
-    directory=$3
-    host_output_directory="$directory/$ip"
+    # Questa funzione esegue una scansione nmap su un dato indirizzo IP. 
+    # I messaggi relativi al progresso della scansione, come l'inizio, il completamento e la creazione del file di log per ogni IP,
+    # vengono rediretti al file di log temporaneo per il monitoraggio in tempo reale tramite 'tail -f'.
+    # L'output dettagliato della scansione nmap viene salvato in un file separato per analisi successive.
+    ip=$1  # Assegna il primo argomento alla variabile 'ip'.
+    type=$2 # Assegna il secondo argomento alla variabile 'type'.
+    directory=$3  # Assegna il terzo argomento alla variabile 'directory'.
+    host_output_directory="$directory/$ip" # Crea una directory specifica per l'indirizzo IP all'interno della directory di output.
     mkdir -p "$host_output_directory" # Crea una sottodirectory per ogni IP
-    output_file="$host_output_directory/nmap_${type// /_}_$(date '+%Y-%m-%d_%H-%M-%S').log" # Formatta il nome del file di log
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): Inizio scansione $type su $ip" >> $temp_log
+    output_file="$host_output_directory/nmap_${type// /_}_$(date '+%Y-%m-%d_%H-%M-%S').log"  # Formatta il nome del file di log, includendo il tipo di scansione e la data.
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): Inizio scansione $type su $ip" >> $temp_log # Registra l'inizio della scansione nel file di log temporaneo.
     nmap $type $ip > "$output_file" # Esegue nmap e redirige l'output nel file di log
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): Completata scansione $type su $ip" >> $temp_log
-    echo "Log file creato: $output_file"
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): Completata scansione $type su $ip" >> $temp_log # Registra il completamento della scansione nel file di log temporaneo.
+    echo "Log file creato: $output_file" >> $temp_log # Registra la creazione del file di log specifico della scansione.
 }
 
 export -f nmap_scan # Esporta la funzione per l'uso nelle sotto-shell
+
+# Selezione del tipo di scansioni nmap
+# Presenta un menu all'utente per selezionare il tipo di scansione nmap desiderato.
+# Include opzioni per varie tipologie di scansioni.
+echo "Seleziona i tipi di scansioni che desideri eseguire:"
+echo "1. Scansione completa (-sC -sV -A)"
+echo "2. Scansione vulnerabilità (--script vuln)"
+echo "3. Scansione dettagliata (-vv)"
+echo "4. Scansione rapida (-F)"
+echo "5. Scansione delle porte comuni (--top-ports)"
+echo "6. Scansione di porte personalizzata (-p)"
+echo "Inserisci i numeri separati da spazi (es. 1 3):"
+read -a scan_choices
+
+# Inizializza le variabili per tenere traccia delle scansioni selezionate
+port_scan_selected=false  # Indica se è stata selezionata la scansione personalizzata delle porte
+top_ports_selected=false  # Indica se è stata selezionata la scansione delle porte più comuni
+top_ports_count=100       # Numero di default delle porte più comuni da scansionare
+
+# Dichiarazione di un array per memorizzare i comandi di scansione
+declare -a scan_commands
+
+# Ciclo for che itera su ogni scelta di scansione fornita dall'utente
+for choice in "${scan_choices[@]}"; do    case $choice in
+        1) scan_commands+=("-sC -sV -A");; # Aggiunge la scansione completa al comando
+        2) scan_commands+=("--script vuln");; # Aggiunge la scansione delle vulnerabilità al comando
+        3) scan_commands+=("-vv");; # Aggiunge la scansione dettagliata al comando
+        4) scan_commands+=("-F");; # Aggiunge la scansione rapida al comando
+        5) top_ports_selected=true;; # Imposta la variabile per indicare che è stata selezionata la scansione delle porte più comuni
+        6) port_scan_selected=true;; # Imposta la variabile per indicare che è stata selezionata la scansione personalizzata delle porte
+        *) echo "Scelta non valida: $choice";; # Gestisce le scelte non valide fornendo un feedback all'utente
+    esac
+done
+
+# Chiedi il numero di porte se --top-ports è selezionato
+if [ "$top_ports_selected" = true ]; then
+    while true; do
+        echo "Hai selezionato la scansione delle porte più comuni con --top-ports."
+        read -p "Quante delle porte più comuni vuoi scansionare? (1-65535, default 100): " input_ports_count
+
+        # Se l'utente non inserisce nulla, usa il valore di default
+        if [[ -z "$input_ports_count" ]]; then
+            echo "Utilizzo del valore di default: 100 porte."
+            top_ports_count=100
+            break
+        # Verifica che l'input sia un numero valido
+        elif [[ $input_ports_count =~ ^[0-9]+$ ]] && [ $input_ports_count -ge 1 ] && [ $input_ports_count -le 65535 ]; then
+            top_ports_count=$input_ports_count
+            break
+        else
+            echo "Input non valido. Inserisci un numero intero tra 1 e 65535."
+        fi
+    done
+
+    scan_commands+=("--top-ports $top_ports_count")
+fi
+
+# Verifica se l'opzione di scansione personalizzata delle porte è stata selezionata
+if [ "$port_scan_selected" = true ]; then
+    while true; do
+        read -p "Inserisci la porta o le porte da scansionare (es. 20-22 80, 8080): " custom_ports # Chiede all'utente di inserire le porte da scansionare
+
+        IFS=', ' read -ra ADDR <<< "$custom_ports" # Utilizza spazi e virgole come separatori per dividere l'input dell'utente
+        valid_port=true
+        for i in "${ADDR[@]}"; do
+            i=$(echo $i | xargs) # Rimuove spazi bianchi extra per standardizzare l'input
+
+            # Verifica se l'input rappresenta un numero di porta singolo o un range di porte
+            if [[ $i =~ ^[0-9]+$ ]]; then 
+                if [ "$i" -gt 65535 ] || [ "$i" -lt 1 ]; then # Controlla se il numero di porta è nel range valido (1-65535)
+                    valid_port=false
+                    break
+                fi
+            elif [[ $i =~ ^[0-9]+-[0-9]+$ ]]; then # Controlla se il range di porte è valido
+                IFS='-' read -ra RANGE <<< "$i"
+                if [ "${RANGE[0]}" -gt 65535 ] || [ "${RANGE[0]}" -lt 1 ] || [ "${RANGE[1]}" -gt 65535 ] || [ "${RANGE[1]}" -lt 1 ]; then
+                    valid_port=false
+                    break
+                fi
+            else
+                valid_port=false  # Imposta la validità della porta a false se il formato non è riconosciuto
+                break
+            fi
+        done
+
+        if [ "$valid_port" = true ]; then
+            # Riassembla le porte in una stringa separata da virgole
+            custom_ports=$(IFS=,; echo "${ADDR[*]}")
+            scan_commands+=("-p $custom_ports")
+            break
+        else
+            echo "Una o più porte specificate non sono nel range valido (1-65535)."
+        fi
+    done
+fi
+
+
+
 
 # Esecuzione parallela delle scansioni nmap in una sotto-shell
 # La sotto-shell permette di eseguire i comandi in background
 (
     # Utilizza xargs per parallelizzare le scansioni
-    cat "$file_input" | xargs -I % -P 10 bash -c "nmap_scan % '-sC -sV -A' '$output_directory'" &
-    cat "$file_input" | xargs -I % -P 10 bash -c "nmap_scan % '--script vuln' '$output_directory'" &
-    cat "$file_input" | xargs -I % -P 10 bash -c "nmap_scan % '-vv' '$output_directory'" &
+    for scan_command in "${scan_commands[@]}"; do
+        cat "$file_input" | xargs -I % -P 10 bash -c "nmap_scan % '$scan_command' '$output_directory'" &
+    done
     
     wait # Aspetta il completamento di tutte le scansioni in parallelo
 
