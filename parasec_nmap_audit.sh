@@ -38,18 +38,43 @@ if [[ ! -r "$file_input" ]]; then
     exit 1
 fi
 
-echo "Inserisci il nome della cartella in cui salvare i log delle scansioni"
-read output_directory
+# Cartella di log predefinita
+output_directory=~/audit2
 
-# Verifica dell'esistenza della directory di output. Se non esiste, prova a crearla.
 if [[ ! -d "$output_directory" ]]; then
-    echo "La directory '$output_directory' non esiste. Creazione in corso..."
-    mkdir -p "$output_directory" || { echo "Errore nella creazione della directory."; exit 1; }
+    echo "La directory di log predefinita '$output_directory' non esiste. Creazione in corso..."
+    mkdir -p "$output_directory" || { echo "Errore nella creazione della directory di log."; exit 1; }
 fi
+
+# Organizzazione basata sulla data e contatori per scansioni eseguite
+today=$(date '+%Y-%m-%d')
+daily_directory="$output_directory/$today"
+
+if [[ ! -d "$daily_directory" ]]; then
+    mkdir -p "$daily_directory"
+    counter=1
+else
+    counter=$(ls "$daily_directory" | wc -l)
+    ((counter++))
+fi
+
+scan_directory="$daily_directory/${counter}_$(date '+%H-%M')"
+mkdir -p "$scan_directory"
+
 
 # Creazione di un file di log temporaneo per le scansioni.
 temp_log=$(mktemp)
 export temp_log # Esporta la variabile per renderla accessibile alle sotto-shell
+
+# Funzione nmap_scan modificata con nomi di file di log descrittivi
+declare -A scan_descriptions=(
+    ["-sC -sV -A"]="full_scan"
+    ["--script vuln"]="vulnerability_scan"
+    ["-vv"]="detailed_scan"
+    ["-F"]="quick_scan"
+    ["--top-ports"]="top_ports_scan"
+    ["-p"]="custom_port_scan"
+)
 
 # Funzione nmap_scan: esegue una scansione nmap su un indirizzo IP specifico.
 # Argomenti:
@@ -64,12 +89,13 @@ nmap_scan() {
     ip=$1  # Assegna il primo argomento alla variabile 'ip'.
     type=$2 # Assegna il secondo argomento alla variabile 'type'.
     directory=$3  # Assegna il terzo argomento alla variabile 'directory'.
+    scan_type_description=${scan_descriptions[$type]}
     host_output_directory="$directory/$ip" # Crea una directory specifica per l'indirizzo IP all'interno della directory di output.
     mkdir -p "$host_output_directory" # Crea una sottodirectory per ogni IP
-    output_file="$host_output_directory/nmap_${type// /_}_$(date '+%Y-%m-%d_%H-%M-%S').log"  # Formatta il nome del file di log, includendo il tipo di scansione e la data.
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): Inizio scansione $type su $ip" >> $temp_log # Registra l'inizio della scansione nel file di log temporaneo.
+    output_file="$host_output_directory/nmap_${scan_type_description}_$(date '+%Y-%m-%d_%H-%M-%S').log"  # Formatta il nome del file di log, includendo il tipo di scansione e la data.
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): Inizio scansione $scan_type_description (nmap $type) su $ip" >> $temp_log # Registra l'inizio della scansione nel file di log temporaneo.
     nmap $type $ip > "$output_file" # Esegue nmap e redirige l'output nel file di log
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): Completata scansione $type su $ip" >> $temp_log # Registra il completamento della scansione nel file di log temporaneo.
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): Completata scansione $scan_type_description (nmap $type) su $ip" >> $temp_log # Registra il completamento della scansione nel file di log temporaneo.
     echo "Log file creato: $output_file" >> $temp_log # Registra la creazione del file di log specifico della scansione.
 }
 
@@ -178,7 +204,7 @@ fi
 (
     # Utilizza xargs per parallelizzare le scansioni
     for scan_command in "${scan_commands[@]}"; do
-        cat "$file_input" | xargs -I % -P 10 bash -c "nmap_scan % '$scan_command' '$output_directory'" &
+        cat "$file_input" | xargs -I % -P 10 bash -c "nmap_scan % '$scan_command' '$scan_directory'" &
     done
     
     wait # Aspetta il completamento di tutte le scansioni in parallelo
