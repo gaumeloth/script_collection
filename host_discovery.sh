@@ -14,6 +14,33 @@ echo "Il nome del file di output include la data e l'ora della scansione, e vien
 echo "Se non viene fornita alcuna risposta alla richiesta di conferma, lo script verrà annullato per impostazione predefinita."
 echo "----------------------------------------------------"
 
+# Funzione per verificare la disponibilità del comando
+command_exists() {
+    type "$1" &> /dev/null
+}
+
+# Ottieni informazioni di rete utilizzando ip o ifconfig
+get_network_info() {
+    if command_exists ip; then
+        echo "Utilizzo del comando ip per ottenere informazioni di rete"
+        IP_INFO=$(ip addr show $(ip route | grep default | awk '{print $5}') | grep "inet\b")
+        IP_ADDR=$(echo $IP_INFO | awk '{print $2}' | cut -d '/' -f1)
+        CIDR=$(echo $IP_INFO | awk '{print $2}' | cut -d '/' -f2)
+    elif command_exists ifconfig; then
+        echo "Utilizzo del comando ifconfig per ottenere informazioni di rete"
+        IFACE=$(route -n | grep '^0.0.0.0' | awk '{print $8}')
+        IP_INFO=$(ifconfig $IFACE | grep 'inet ')
+        IP_ADDR=$(echo $IP_INFO | awk '{print $2}')
+        NETMASK=$(echo $IP_INFO | awk '{print $4}')
+        # Converti NETMASK da formato puntato a CIDR
+        IFS='.' read -r i1 i2 i3 i4 <<< "$NETMASK"
+        CIDR=$(( $(echo "obase=2; $i1" | bc | grep -o "1" | wc -l) + $(echo "obase=2; $i2" | bc | grep -o "1" | wc -l) + $(echo "obase=2; $i3" | bc | grep -o "1" | wc -l) + $(echo "obase=2; $i4" | bc | grep -o "1" | wc -l) ))
+    else
+        echo "Né il comando ip né ifconfig sono disponibili su questo sistema."
+        exit 1
+    fi
+}
+
 # Richiesta di conferma per proseguire
 while true; do
     read -p "Vuoi proseguire con la scansione? (s/n, default=n): " choice
@@ -28,9 +55,7 @@ echo "Inizio della scoperta della rete..."
 
 # Ottieni l'indirizzo IP e la maschera di sottorete dell'interfaccia di rete principale
 echo "recupero dell'indirizzo IP e della maschera di sottorete dell'interfaccia di rete principale..."
-IP_INFO=$(ip addr show $(ip route | grep default | awk '{print $5}') | grep "inet\b")
-IP_ADDR=$(echo $IP_INFO | awk '{print $2}' | cut -d '/' -f1)
-CIDR=$(echo $IP_INFO | awk '{print $2}' | cut -d '/' -f2)
+get_network_info
 
 # Stampa i valori ottenuti
 echo "Indirizzo IP: $IP_ADDR"
